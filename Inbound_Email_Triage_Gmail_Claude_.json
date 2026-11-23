@@ -1,0 +1,776 @@
+{
+  "name": "Inbound Email Triage (Gmail + Claude)",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyHour"
+            }
+          ]
+        },
+        "filters": {
+          "q": "in:inbox is:unread"
+        }
+      },
+      "id": "bf977ef6-fc47-40c8-b9ee-6db96a2fd0e2",
+      "name": "New Inbox Email",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1568,
+        336
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c1",
+              "name": "sales_forward_to",
+              "type": "string",
+              "value": "rokas@ops.com"
+            },
+            {
+              "id": "c2",
+              "name": "support_forward_to",
+              "type": "string",
+              "value": "rokas@ops.com"
+            },
+            {
+              "id": "c3",
+              "name": "invoice_forward_to",
+              "type": "string",
+              "value": "rokas@ops.com"
+            },
+            {
+              "id": "c4",
+              "name": "sales_slack_channel",
+              "type": "string",
+              "value": "rokas@ops.com"
+            },
+            {
+              "id": "c5",
+              "name": "support_slack_channel",
+              "type": "string",
+              "value": "rokas@ops.com"
+            },
+            {
+              "id": "c6",
+              "name": "invoice_slack_channel",
+              "type": "string",
+              "value": "rokas@ops.com"
+            },
+            {
+              "id": "c7",
+              "name": "sales_label",
+              "type": "string",
+              "value": "rokas@ops.com"
+            },
+            {
+              "id": "c8",
+              "name": "support_label",
+              "type": "string",
+              "value": "rokas@ops.com"
+            },
+            {
+              "id": "c9",
+              "name": "invoice_label",
+              "type": "string",
+              "value": "rokas@ops.com"
+            },
+            {
+              "id": "c10",
+              "name": "spam_label",
+              "type": "string",
+              "value": "AI/Spam"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "a3eb644e-dcd4-46cf-bda1-a23ab3b73824",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1328,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"claude-3-5-haiku-20241022\", max_tokens: 300, system: \"You triage inbound email for a general company inbox (info@/sales@). Classify each email into exactly one category: sales_lead (new business inquiry, pricing question, demo request, partnership pitch), support (existing customer issue, bug report, how-to question, complaint), invoice (billing, payment, invoice copy requests, accounts payable/receivable), or spam (unsolicited marketing, phishing, irrelevant). Respond with ONLY valid JSON, no markdown, no commentary, in exactly this shape: {\\\"category\\\": \\\"sales_lead|support|invoice|spam\\\", \\\"confidence\\\": 0.0-1.0, \\\"reasoning\\\": \\\"one short sentence\\\"}\", messages: [ { role: \"user\", content: \"Subject: \" + ($json.subject || \"\") + \"\\nFrom: \" + ($json.from || \"\") + \"\\nBody:\\n\" + ($json.textPlain || $json.snippet || \"\") } ] }) }}",
+        "options": {}
+      },
+      "id": "577b0e40-3047-40fd-87b4-0ab080a4e8ae",
+      "name": "Classify with Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1072,
+        336
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const originalData = $('Config').item.json;\nconst apiResponse = items[0].json;\n\nlet category = 'support';\nlet confidence = 0;\nlet reasoning = '';\n\ntry {\n  const text = apiResponse.content[0].text;\n  const parsed = JSON.parse(text);\n  const allowed = ['sales_lead', 'support', 'invoice', 'spam'];\n  category = allowed.includes(parsed.category) ? parsed.category : 'support';\n  confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0;\n  reasoning = parsed.reasoning || '';\n} catch (e) {\n  reasoning = 'Classifier output could not be parsed; routed to Support as a safe fallback. Raw error: ' + e.message;\n}\n\nreturn [{ json: { ...originalData, category, confidence, reasoning } }];"
+      },
+      "id": "5fa925fb-bd6f-4508-95f8-7791b897c145",
+      "name": "Parse Classification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -816,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.category }}",
+                    "rightValue": "sales_lead",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "04ddce1a-352c-43e5-8873-32a6d606d281"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.category }}",
+                    "rightValue": "support",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "8982cd60-41f1-4c69-8402-78a701799242"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.category }}",
+                    "rightValue": "invoice",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "18cc8a46-5c72-43a1-a8be-3553276e8c4b"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.category }}",
+                    "rightValue": "spam",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "5e1726ed-f6b1-4181-b03c-cb965e137330"
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "support"
+        }
+      },
+      "id": "136a00ca-c7e3-40ed-9ed0-bd8682316867",
+      "name": "Route by Category",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -576,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $json.id }}",
+        "labelIds": [
+          "Label_2192688336536435329"
+        ]
+      },
+      "id": "7af96e81-90d2-4e88-ba5f-9c9cc95eb224",
+      "name": "Sales: Add Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -272,
+        -128
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      },
+      "notes": "After import: open this node and select/create the label matching Config.sales_label ('AI/Sales Lead')."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.sales_forward_to }}",
+        "subject": "=[Sales Lead] {{ $json.subject }}",
+        "message": "=Routed automatically by AI triage (confidence {{ $json.confidence }}).\nReason: {{ $json.reasoning }}\n\nFrom: {{ $json.from }}\nOriginal thread: https://mail.google.com/mail/u/0/#inbox/{{ $json.threadId }}\n\n--- Original message ---\n{{ $json.textPlain || $json.snippet }}",
+        "options": {}
+      },
+      "id": "6e4d0ff6-1f78-4f3b-8f78-b0b925480ac0",
+      "name": "Sales: Forward Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -16,
+        -128
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $json.sales_slack_channel }}"
+        },
+        "text": "=:moneybag: *New sales lead* from {{ $json.from }}\n*Subject:* {{ $json.subject }}\n*Confidence:* {{ $json.confidence }}\n<https://mail.google.com/mail/u/0/#inbox/{{ $json.threadId }}|Open thread>",
+        "otherOptions": {}
+      },
+      "id": "3997c540-0514-4450-b8c5-a7c32f10212c",
+      "name": "Sales: Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        -128
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "markAsRead",
+        "messageId": "={{ $json.id }}"
+      },
+      "id": "0cae6e2f-d05d-4a60-ac5f-1ac88d67cb6f",
+      "name": "Sales: Mark as Read",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        480,
+        -128
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $json.id }}",
+        "labelIds": [
+          "Label_7011699095762719406"
+        ]
+      },
+      "id": "40f0ba18-3809-4f8a-b69f-77864193d7fe",
+      "name": "Support: Add Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -272,
+        176
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      },
+      "notes": "After import: select/create the label matching Config.support_label ('AI/Support')."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.support_forward_to }}",
+        "subject": "=[Support] {{ $json.subject }}",
+        "message": "=Routed automatically by AI triage (confidence {{ $json.confidence }}).\nReason: {{ $json.reasoning }}\n\nFrom: {{ $json.from }}\nOriginal thread: https://mail.google.com/mail/u/0/#inbox/{{ $json.threadId }}\n\n--- Original message ---\n{{ $json.textPlain || $json.snippet }}",
+        "options": {}
+      },
+      "id": "a6d4b8ca-ebb7-401b-b943-9e0ce2af1f6b",
+      "name": "Support: Forward Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -16,
+        176
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $json.support_slack_channel }}"
+        },
+        "text": "=:sos: *New support request* from {{ $json.from }}\n*Subject:* {{ $json.subject }}\n*Confidence:* {{ $json.confidence }}\n<https://mail.google.com/mail/u/0/#inbox/{{ $json.threadId }}|Open thread>",
+        "otherOptions": {}
+      },
+      "id": "0d0b8f23-5057-49dc-b13e-0aa9ed930e95",
+      "name": "Support: Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        176
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "markAsRead",
+        "messageId": "={{ $json.id }}"
+      },
+      "id": "542f7395-aa0e-4fa1-b665-a4eb6f76b83f",
+      "name": "Support: Mark as Read",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        480,
+        176
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $json.id }}",
+        "labelIds": [
+          "Label_1790433043445552457"
+        ]
+      },
+      "id": "a1a7c858-c689-4df2-948f-7c0162af0ffe",
+      "name": "Invoice: Add Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -272,
+        480
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      },
+      "notes": "After import: select/create the label matching Config.invoice_label ('AI/Invoice')."
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.invoice_forward_to }}",
+        "subject": "=[Invoice] {{ $json.subject }}",
+        "message": "=Routed automatically by AI triage (confidence {{ $json.confidence }}).\nReason: {{ $json.reasoning }}\n\nFrom: {{ $json.from }}\nOriginal thread: https://mail.google.com/mail/u/0/#inbox/{{ $json.threadId }}\n\n--- Original message ---\n{{ $json.textPlain || $json.snippet }}",
+        "options": {}
+      },
+      "id": "913029db-2b78-4e1d-98ea-d62362c7bec8",
+      "name": "Invoice: Forward Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -16,
+        480
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "={{ $json.invoice_slack_channel }}"
+        },
+        "text": "=:receipt: *New invoice/billing email* from {{ $json.from }}\n*Subject:* {{ $json.subject }}\n*Confidence:* {{ $json.confidence }}\n<https://mail.google.com/mail/u/0/#inbox/{{ $json.threadId }}|Open thread>",
+        "otherOptions": {}
+      },
+      "id": "1fe4ca85-0bb6-4940-9a47-b3f3dffae1a4",
+      "name": "Invoice: Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        480
+      ],
+      "credentials": {
+        "slackOAuth2Api": {
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "markAsRead",
+        "messageId": "={{ $json.id }}"
+      },
+      "id": "6d22f30d-6b55-4413-be2e-80266c15c883",
+      "name": "Invoice: Mark as Read",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        480,
+        480
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $json.id }}",
+        "labelIds": [
+          "SPAM",
+          "Label_1353008271997750684"
+        ]
+      },
+      "id": "65e1aab2-84ca-4ea8-a6e0-f0b4ca6ae049",
+      "name": "Spam: Add Label",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -272,
+        784
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      },
+      "notes": "After import: select/create the label matching Config.spam_label ('AI/Spam')."
+    },
+    {
+      "parameters": {
+        "operation": "markAsRead",
+        "messageId": "={{ $json.id }}"
+      },
+      "id": "170a9729-856b-4556-b674-c975bea932ba",
+      "name": "Spam: Mark as Read",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -16,
+        784
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "New Inbox Email": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Classify with Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify with Claude": {
+      "main": [
+        [
+          {
+            "node": "Parse Classification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Classification": {
+      "main": [
+        [
+          {
+            "node": "Route by Category",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Category": {
+      "main": [
+        [
+          {
+            "node": "Sales: Add Label",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Support: Add Label",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Invoice: Add Label",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Spam: Add Label",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales: Add Label": {
+      "main": [
+        [
+          {
+            "node": "Sales: Forward Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales: Forward Email": {
+      "main": [
+        [
+          {
+            "node": "Sales: Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sales: Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Sales: Mark as Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Support: Add Label": {
+      "main": [
+        [
+          {
+            "node": "Support: Forward Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Support: Forward Email": {
+      "main": [
+        [
+          {
+            "node": "Support: Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Support: Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Support: Mark as Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invoice: Add Label": {
+      "main": [
+        [
+          {
+            "node": "Invoice: Forward Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invoice: Forward Email": {
+      "main": [
+        [
+          {
+            "node": "Invoice: Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invoice: Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Invoice: Mark as Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Spam: Add Label": {
+      "main": [
+        [
+          {
+            "node": "Spam: Mark as Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "triggerCount": 0,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

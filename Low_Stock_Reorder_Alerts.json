@@ -1,0 +1,211 @@
+{
+  "name": "Low-Stock Reorder Alerts",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        32,
+        80
+      ],
+      "id": "ae87d5b6-4545-4853-92eb-bbf36cb0eb83",
+      "name": "Daily 08:00"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA",
+          "mode": "list",
+          "cachedResultName": "CleanWarehouse",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        256,
+        208
+      ],
+      "id": "b1658566-9016-49a0-a422-38c6e401bdcb",
+      "name": "Get Stock (CleanWarehouse)",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao",
+          "mode": "list",
+          "cachedResultName": "CleanLeads",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        256,
+        -48
+      ],
+      "id": "5f4acf9c-f117-4976-8b67-8b64c02cef03",
+      "name": "Get Lead Times (CleanLeads)",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        480,
+        80
+      ],
+      "id": "48c8aecb-4a17-4d4d-b4b2-d6eadce87f7f",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Reorder policy (dummy values, tune per client) ----\nconst REORDER_POINT = {\n  \"REBAR-12MM\": 200,\n  \"CEMENT-25KG\": 500,\n  \"TIMBER-50X100\": 300,\n  \"INSULATION-50MM\": 150,\n  \"BRICK-PALLET\": 40\n};\nconst TARGET_LEVEL = {\n  \"REBAR-12MM\": 600,\n  \"CEMENT-25KG\": 1500,\n  \"TIMBER-50X100\": 900,\n  \"INSULATION-50MM\": 450,\n  \"BRICK-PALLET\": 120\n};\n\n// Field-name helpers — tolerant of both header styles\n// (CleanWarehouse: warehouse_id/stock_qty/last_updated ; older map: ID/qty/update)\nconst whId       = r => (r.warehouse_id ?? r.ID ?? null);\nconst stockQty   = r => (r.stock_qty ?? r.qty);\nconst leadDays   = r => (r.lead_time_days ?? r.lead_time);\nconst supplierOf = r => ((r[\"supplier \"] ?? r.supplier ?? \"Unknown\").toString().trim());\n\nconst rows = $input.all().map(i => i.json);\n\n// A stock row has a warehouse id or a stock qty field.\nconst stockRows = rows.filter(r => (\"warehouse_id\" in r) || (\"ID\" in r) || (\"stock_qty\" in r) || (\"qty\" in r));\n// A lead row has a lead time and no warehouse.\nconst leadRows  = rows.filter(r => ((\"lead_time_days\" in r) || (\"lead_time\" in r)) && !(\"warehouse_id\" in r) && !(\"stock_qty\" in r) && !(\"ID\" in r));\n\n// Best (shortest) lead time + supplier per SKU.\nconst leadBySku = {};\nfor (const r of leadRows) {\n  const raw = leadDays(r);\n  const lt = (raw === \"\" || raw === null || raw === undefined) ? null : Number(raw);\n  const existing = leadBySku[r.sku];\n  if (!existing || (lt !== null && (existing.lead_time === null || lt < existing.lead_time))) {\n    leadBySku[r.sku] = { supplier: supplierOf(r), lead_time: lt };\n  }\n}\n\nconst flagged = [];\nfor (const r of stockRows) {\n  const sku = r.sku;\n  const rp = REORDER_POINT[sku];\n  if (rp === undefined) continue; // SKU not in policy, skip\n\n  const raw = stockQty(r);\n  const qty = (raw === \"\" || raw === null || raw === undefined || String(raw).toLowerCase() === \"n/a\")\n    ? null : Number(raw);\n\n  let status, orderQty;\n  if (qty === null || isNaN(qty)) {\n    status = \"UNKNOWN\";\n    orderQty = null;\n  } else if (qty <= rp) {\n    status = qty === 0 ? \"STOCKOUT\" : \"LOW\";\n    const target = TARGET_LEVEL[sku] || rp * 3;\n    orderQty = Math.max(target - qty, 0);\n  } else {\n    continue; // healthy stock, skip\n  }\n\n  const lead = leadBySku[sku] || { supplier: \"Unknown\", lead_time: null };\n  flagged.push({\n    warehouse: whId(r),\n    sku,\n    on_hand: qty,\n    reorder_point: rp,\n    status,\n    suggested_order_qty: orderQty,\n    supplier: lead.supplier,\n    lead_time_days: lead.lead_time,\n    conflict: r.conflict === true || String(r.conflict).toLowerCase() === \"true\"\n  });\n}\n\nif (flagged.length === 0) return []; // nothing low -> no alert sent\n\nconst rank = { \"STOCKOUT\": 0, \"LOW\": 1, \"UNKNOWN\": 2 };\nflagged.sort((a, b) => (rank[a.status] - rank[b.status]) || String(a.warehouse).localeCompare(String(b.warehouse)));\n\nconst lines = flagged.map(f => {\n  const icon = f.status === \"STOCKOUT\" ? \":red_circle:\" : f.status === \"LOW\" ? \":large_orange_circle:\" : \":white_circle:\";\n  const onHand = f.on_hand === null ? \"unknown\" : f.on_hand;\n  const orderTxt = f.suggested_order_qty === null ? \"verify stock manually\" : `order ${f.suggested_order_qty}`;\n  const leadTxt = f.lead_time_days === null ? \"lead time n/a\" : `${f.lead_time_days}d lead`;\n  const conflictTxt = f.conflict ? \"  :warning: data conflict\" : \"\";\n  return `${icon} *${f.sku}* @ ${f.warehouse} \\u2014 on hand: ${onHand} (reorder \\u2264 ${f.reorder_point}) \\u2192 *${orderTxt}* from ${f.supplier} (${leadTxt})${conflictTxt}`;\n});\n\nconst counts = flagged.reduce((a, f) => { a[f.status] = (a[f.status] || 0) + 1; return a; }, {});\nconst header = `:package: *Low-stock reorder alert* \\u2014 ${flagged.length} item(s) flagged` +\n  ` (${counts.STOCKOUT || 0} stockout, ${counts.LOW || 0} low, ${counts.UNKNOWN || 0} unknown)`;\n\nconst message = `${header}\\n\\n${lines.join(\"\\n\")}`;\n\nreturn [{ json: { alert_count: flagged.length, message, items: flagged } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        80
+      ],
+      "id": "ed05b4ce-ffaa-4a7d-87b7-2c20cd061dc1",
+      "name": "Compute Reorders"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "https://app.slack.com/client/T0BJKJ5CFPT/C0BKA8XNEG5",
+          "mode": "url"
+        },
+        "text": "={{ $json.message }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        928,
+        80
+      ],
+      "id": "2cca132f-d8a8-47cc-b803-19844079dd10",
+      "name": "Post to Slack",
+      "credentials": {
+        "slackOAuth2Api": {
+          "name": "Slack account"
+        }
+      },
+      "notes": "Uses your connected Slack credential. Set Channel = By URL and paste your channel URL. Message renders *bold* and :emoji:."
+    }
+  ],
+  "connections": {
+    "Daily 08:00": {
+      "main": [
+        [
+          {
+            "node": "Get Stock (CleanWarehouse)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Lead Times (CleanLeads)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Stock (CleanWarehouse)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Lead Times (CleanLeads)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Compute Reorders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Reorders": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "triggerCount": 0,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

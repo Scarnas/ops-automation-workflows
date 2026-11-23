@@ -1,0 +1,404 @@
+{
+  "name": "Customer Shipment Notifications (v2 - split aware)",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "documentId": {
+          "__rl": true,
+          "value": "1FRPTRFGM8YBgxfPEn6HBgzO5qLacAae5JjRNIIR8dm0",
+          "mode": "list",
+          "cachedResultName": "Orderslog",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1FRPTRFGM8YBgxfPEn6HBgzO5qLacAae5JjRNIIR8dm0/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1FRPTRFGM8YBgxfPEn6HBgzO5qLacAae5JjRNIIR8dm0/edit#gid=0"
+        },
+        "event": "rowAdded",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 1,
+      "position": [
+        -896,
+        192
+      ],
+      "id": "1a00ac88-2b58-4158-84fa-d5d63b38650c",
+      "name": "New Order (Orderslog)",
+      "credentials": {
+        "googleSheetsTriggerOAuth2Api": {
+          "name": "Google Sheets Trigger account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Group new Orderslog rows by order_id -> ONE email per order.\n// A split order (2 lines) becomes a single email describing each part + its ETA.\nconst groups = {};\nfor (const _item of $input.all()) {\n  const o = _item.json;\n  const id = o.order_id || ('NOID-' + Math.random());\n  (groups[id] = groups[id] || []).push(o);\n}\n\nconst out = [];\nfor (const id of Object.keys(groups)) {\n  const lines = groups[id];\n  const rank = { 'Local':0, 'Warehouse Transfer':1, 'Manufacturer Order':2 };\n  const pathOf = o => o['fulfilment path'] || o.fulfillment_path || '';\n  lines.sort((a,b) => (rank[pathOf(a)] ?? 9) - (rank[pathOf(b)] ?? 9));\n\n  const first = lines[0];\n  const name  = (first.customer || '').toString();\n  const email = (first.email || '').toString().trim() || null;\n  const phone = (first.phone || '').toString().trim() || null;\n\n  const describe = o => {\n    const path = pathOf(o);\n    const src  = o.source_warehouse || o.source || o.requested_warehouse || '';\n    const eta  = o.eta_date;\n    if (path === 'Local')              return `  • ${o.qty} × ${o.sku} — dispatching from ${src} now, estimated arrival ${eta}`;\n    if (path === 'Warehouse Transfer') return `  • ${o.qty} × ${o.sku} — transferring from our ${src} location, estimated arrival ${eta}`;\n    if (path === 'Manufacturer Order') return `  • ${o.qty} × ${o.sku} — on backorder (made to order by our supplier), estimated ${eta}`;\n    return `  • ${o.qty} × ${o.sku} — estimated ${eta}`;\n  };\n\n  const totalQty = lines.reduce((s,l)=> s + Number(l.qty||0), 0);\n  const skus  = [...new Set(lines.map(l=>l.sku))];\n  const paths = [...new Set(lines.map(pathOf))];\n  const etas  = lines.map(l=>l.eta_date).filter(Boolean).sort();\n  const lastEta = etas[etas.length-1];\n  const isSplit = lines.length > 1;\n\n  let subject, body;\n  if (isSplit) {\n    subject = `Your order ${id} — ${lines.length} shipments, completion by ${lastEta}`;\n    body =\n`Hi ${name},\n\nYour order ${id} is confirmed. To get it to you as fast as possible, it's arriving in ${lines.length} parts:\n\n${lines.map(describe).join('\\n')}\n\nThe earlier items ship first; the backordered portion follows. Full order completed by ${lastEta}.\n\nReply to this email with any questions.\n\nThanks,\nOperations Team`;\n  } else {\n    const o = lines[0];\n    subject = `Your order update — ${o.sku} (x${o.qty}) — ETA ${o.eta_date}`;\n    body =\n`Hi ${name},\n\nYour order is confirmed.\n\n${describe(o).trim().replace(/^• /,'')}\n\nReply to this email with any questions.\n\nThanks,\nOperations Team`;\n  }\n\n  out.push({ json: {\n    email_found: !!email,\n    subject, body,\n    customer: name,\n    sku: skus.join(', '),\n    qty: totalQty,\n    eta_date: lastEta,\n    path: paths.join(' + '),\n    email, phone,\n    status: email ? 'SENT' : 'NO_EMAIL',\n    notified_at: new Date().toISOString()\n  }});\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        192
+      ],
+      "id": "372938aa-8134-438a-b892-f5d5f753edff",
+      "name": "Compose Notification"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-email-found",
+              "leftValue": "={{ $json.email_found }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -416,
+        192
+      ],
+      "id": "56d8d5c5-d125-48cc-a47d-58a0be96e053",
+      "name": "Email on file?"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -192,
+        80
+      ],
+      "id": "1b93df2a-95c9-45ba-9ab8-80ceb213c6a4",
+      "name": "Send Status Email",
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      },
+      "notes": "Attach your Gmail OAuth credential."
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wfgSiyAunaXDeDcJ3Biw1zRWQ_InvVKrPCrWQOhRhsg",
+          "mode": "list",
+          "cachedResultName": "NotificationLog",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1wfgSiyAunaXDeDcJ3Biw1zRWQ_InvVKrPCrWQOhRhsg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1wfgSiyAunaXDeDcJ3Biw1zRWQ_InvVKrPCrWQOhRhsg/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "customer",
+              "displayName": "customer",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "qty",
+              "displayName": "qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "eta_date",
+              "displayName": "eta_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "path",
+              "displayName": "path",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "notified_at",
+              "displayName": "notified_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        32,
+        80
+      ],
+      "id": "00609dce-1636-4b7c-9d4e-472ea1296764",
+      "name": "Log Sent",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "SELECT the NotificationLog document + sheet from the dropdowns. Auto-maps fields to matching headers: customer, sku, qty, eta_date, path, email, phone, status, notified_at."
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1wfgSiyAunaXDeDcJ3Biw1zRWQ_InvVKrPCrWQOhRhsg",
+          "mode": "list",
+          "cachedResultName": "NotificationLog",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1wfgSiyAunaXDeDcJ3Biw1zRWQ_InvVKrPCrWQOhRhsg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1wfgSiyAunaXDeDcJ3Biw1zRWQ_InvVKrPCrWQOhRhsg/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "customer",
+              "displayName": "customer",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "qty",
+              "displayName": "qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "eta_date",
+              "displayName": "eta_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "path",
+              "displayName": "path",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "notified_at",
+              "displayName": "notified_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -192,
+        304
+      ],
+      "id": "1bbeea78-430c-48b7-9c9f-9188da733507",
+      "name": "Log Missing Email",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Same NotificationLog sheet. Logs orders with no email (status NO_EMAIL) so none are silently dropped."
+    }
+  ],
+  "connections": {
+    "New Order (Orderslog)": {
+      "main": [
+        [
+          {
+            "node": "Compose Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Notification": {
+      "main": [
+        [
+          {
+            "node": "Email on file?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email on file?": {
+      "main": [
+        [
+          {
+            "node": "Send Status Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Missing Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "triggerCount": 0,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

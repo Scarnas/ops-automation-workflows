@@ -1,0 +1,463 @@
+{
+  "name": "Supplier Doc Extractor (v2 - CleanLeads enrich)",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Supplier Document",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Supplier Document",
+              "fieldType": "file",
+              "multipleFiles": false,
+              "acceptFileTypes": ".pdf",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        480,
+        0
+      ],
+      "id": "13767f64-b5f8-48a0-9293-b85e6f97c0de",
+      "name": "Upload Supplier PDF"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "Supplier_Document",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        704,
+        0
+      ],
+      "id": "5008d7eb-2396-4c44-b8ae-b5879f15ed7f",
+      "name": "Extract PDF Text",
+      "notes": "Binary property must match the form file field. If extraction fails, check the property name (often 'Supplier_Document')."
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = ($json.text || '').toString().slice(0, 60000);\nconst schema = '{\"supplier\":string,\"doc_type\":string,\"doc_date\":\"YYYY-MM-DD\",\"currency\":string,\"line_items\":[{\"sku\":string,\"description\":string,\"qty\":number,\"unit_price\":number}]}';\nconst prompt = 'Extract exactly this JSON schema from the logistics supplier document below ' +\n  '(it may be an invoice, packing slip, or delivery note). Use null for anything missing. ' +\n  'Return ONLY minified JSON - no markdown, no prose.\\n\\nSCHEMA: ' + schema + '\\n\\nDOCUMENT:\\n' + text;\n\nreturn [{ json: { body: {\n  model: 'claude-haiku-4-5-20251001',\n  max_tokens: 4096,\n  system: 'You extract structured data from logistics supplier documents. You always return valid JSON only.',\n  messages: [{ role: 'user', content: prompt }]\n} } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        928,
+        0
+      ],
+      "id": "8a13c970-ade4-4ab4-b558-06ee3e6b4de6",
+      "name": "Build Request"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1152,
+        0
+      ],
+      "id": "0d714d42-ad4f-4a59-81ac-936763dd4676",
+      "name": "Claude — Extract",
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Header Auth account"
+        }
+      },
+      "notes": "Create an 'Header Auth' credential with Name = x-api-key, Value = your Anthropic API key. Adjust the model in Build Request if needed."
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json;\nlet text = '';\nif (Array.isArray(resp.content)) text = resp.content.map(c => c.text || '').join('');\nelse text = resp.text || resp.completion || '';\n\nlet data = null;\ntry { data = JSON.parse(text); } catch (e) {\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  if (m) { try { data = JSON.parse(m[0]); } catch (_) {} }\n}\nif (!data) return [{ json: { error: 'could not parse model output', raw: String(text).slice(0, 500) } }];\n\nconst skuMap = {\n  rebar12mm:'REBAR-12MM', armatura12mm:'REBAR-12MM', cement25kg:'CEMENT-25KG', cementas25kg:'CEMENT-25KG',\n  mediena50x100:'TIMBER-50X100', timber50x100:'TIMBER-50X100', termoizoliacija50mm:'INSULATION-50MM',\n  insulation50mm:'INSULATION-50MM', plytupalete:'BRICK-PALLET', brickpallet:'BRICK-PALLET'\n};\nconst norm = s => { if (!s) return null; const k = String(s).toLowerCase().replace(/[\\s\\-]/g,''); return skuMap[k] || String(s).toUpperCase(); };\nconst now = new Date().toISOString();\nconst items = Array.isArray(data.line_items) ? data.line_items : [];\n\nif (!items.length) return [{ json: {\n  supplier: data.supplier || null, doc_type: data.doc_type || null, doc_date: data.doc_date || null,\n  sku: null, description: '(no line items parsed)', qty: null, unit_price: null,\n  currency: data.currency || null, parsed_at: now\n} }];\n\nreturn items.map(li => ({ json: {\n  supplier: data.supplier || null, doc_type: data.doc_type || null, doc_date: data.doc_date || null,\n  sku: norm(li.sku), description: li.description || null, qty: (li.qty ?? null), unit_price: (li.unit_price ?? null),\n  currency: data.currency || null, parsed_at: now\n} }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        0
+      ],
+      "id": "ba4d61d7-bd7d-4c8d-b2ba-381d0baea522",
+      "name": "Parse & Normalize"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1LQxAag4HglZSt-KN-HB3bW-R0TIUmdT_LLqbiNEijEE",
+          "mode": "list",
+          "cachedResultName": "InboundDocuments",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1LQxAag4HglZSt-KN-HB3bW-R0TIUmdT_LLqbiNEijEE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1LQxAag4HglZSt-KN-HB3bW-R0TIUmdT_LLqbiNEijEE/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "supplier",
+              "displayName": "supplier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "doc_type",
+              "displayName": "doc_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "doc_date",
+              "displayName": "doc_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "description",
+              "displayName": "description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "qty",
+              "displayName": "qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "unit_price",
+              "displayName": "unit_price",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "currency",
+              "displayName": "currency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "parsed_at",
+              "displayName": "parsed_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1600,
+        0
+      ],
+      "id": "31f1cf41-9584-44d0-a75e-4d2a24500b43",
+      "name": "Log to InboundDocuments",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Create an 'InboundDocuments' sheet with headers: supplier, doc_type, doc_date, sku, description, qty, unit_price, currency, parsed_at."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Enrich CleanLeads from extracted supplier line items.\n// Only rows with a real SKU and a price; de-dupe by SKU (last price wins).\n// NOTE: the CleanLeads header is 'supplier ' WITH a trailing space - keep it.\nconst out = new Map();\nfor (const it of $input.all()) {\n  const j = it.json || {};\n  if (!j.sku || j.unit_price == null) continue;\n  const row = { sku: j.sku, last_price: j.unit_price, last_price_at: j.parsed_at };\n  if (j.supplier) row['supplier '] = j.supplier;   // trailing space is intentional\n  if (j.currency) row.price_currency = j.currency;\n  out.set(j.sku, row);\n}\nreturn Array.from(out.values()).map(json => ({ json }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        240
+      ],
+      "id": "40317c2e-3cd4-4bf6-a562-8f81e6ce3315",
+      "name": "Build Leads Update"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao",
+          "mode": "list",
+          "cachedResultName": "CleanLeads",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "sku"
+          ],
+          "schema": [
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "supplier",
+              "displayName": "supplier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "lead_time_days",
+              "displayName": "lead_time_days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_price",
+              "displayName": "last_price",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "price_currency",
+              "displayName": "price_currency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_price_at",
+              "displayName": "last_price_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "supplier ",
+              "displayName": "supplier ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1600,
+        240
+      ],
+      "id": "45143dc9-ca90-4dec-8a0a-2ed34c39462a",
+      "name": "Update CleanLeads",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "appendOrUpdate on 'sku'. CleanLeads needs headers: last_price, price_currency, last_price_at. Confirm the 'supplier ' header has its trailing space."
+    }
+  ],
+  "connections": {
+    "Upload Supplier PDF": {
+      "main": [
+        [
+          {
+            "node": "Extract PDF Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF Text": {
+      "main": [
+        [
+          {
+            "node": "Build Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Request": {
+      "main": [
+        [
+          {
+            "node": "Claude — Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude — Extract": {
+      "main": [
+        [
+          {
+            "node": "Parse & Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Normalize": {
+      "main": [
+        [
+          {
+            "node": "Log to InboundDocuments",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Leads Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Leads Update": {
+      "main": [
+        [
+          {
+            "node": "Update CleanLeads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "triggerCount": 0,
+  "meta": null
+}

@@ -1,0 +1,527 @@
+{
+  "name": "Low-Stock Reorder Alerts (v4 - PO writer)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -560,
+        272
+      ],
+      "id": "9457feb4-84a2-45da-b925-bfab860fb319",
+      "name": "Daily 08:00"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA",
+          "mode": "list",
+          "cachedResultName": "CleanWarehouse",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -336,
+        400
+      ],
+      "id": "341c53df-f98b-4918-ae4b-2b16c40a298f",
+      "name": "Get Stock (CleanWarehouse)",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao",
+          "mode": "list",
+          "cachedResultName": "CleanLeads",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -336,
+        144
+      ],
+      "id": "90a75b4b-5e9f-4ff7-8a7c-4b8bd6867f76",
+      "name": "Get Lead Times (CleanLeads)",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 4
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -112,
+        272
+      ],
+      "id": "cea242fd-845f-4203-a1e0-4f6f04ea530b",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reorder policy (dummy values, tune per client)\nconst REORDER_POINT = { \"REBAR-12MM\":200,\"CEMENT-25KG\":500,\"TIMBER-50X100\":300,\"INSULATION-50MM\":150,\"BRICK-PALLET\":40 };\nconst TARGET_LEVEL  = { \"REBAR-12MM\":600,\"CEMENT-25KG\":1500,\"TIMBER-50X100\":900,\"INSULATION-50MM\":450,\"BRICK-PALLET\":120 };\n\nconst whId       = r => (r.warehouse_id ?? r.ID ?? null);\nconst stockQty   = r => (r.stock_qty ?? r.qty);\nconst leadDays   = r => (r.lead_time_days ?? r.lead_time);\nconst supplierOf = r => ((r[\"supplier \"] ?? r.supplier ?? \"Unknown\").toString().trim());\n\nconst rows = $input.all().map(i => i.json);\nconst poRows       = rows.filter(r => ('po_id' in r));\nconst movementRows = rows.filter(r => !('po_id' in r) && (('delta' in r) || ('type' in r && 'ts' in r)));\nconst stockRows    = rows.filter(r => !('po_id' in r) && !('delta' in r) && ((\"warehouse_id\" in r) || (\"ID\" in r) || (\"stock_qty\" in r) || (\"qty\" in r)));\nconst leadRows     = rows.filter(r => !('po_id' in r) && !('delta' in r) && ((\"lead_time_days\" in r) || (\"lead_time\" in r)) && !(\"warehouse_id\" in r) && !(\"stock_qty\" in r) && !(\"ID\" in r));\n\nfunction buildOnHand(sRows,mRows){\n  const num=v=>(v===''||v==null||String(v).toLowerCase()==='n/a')?null:Number(v);\n  const K=(w,s)=>w+'|'+s; const anchor={};\n  for(const r of sRows){const w=r.warehouse_id??r.ID,s=r.sku;if(w==null||s==null)continue;anchor[K(w,s)]={qty:num(r.stock_qty??r.qty),lu:(r.last_updated||'')};}\n  const delta={};\n  for(const m of mRows){const w=m.warehouse_id,s=m.sku;if(w==null||s==null)continue;const k=K(w,s);const cut=anchor[k]?anchor[k].lu:'';if(String(m.ts||'')>cut)delta[k]=(delta[k]||0)+Number(m.delta||0);}\n  return {get(w,s){const k=K(w,s),a=anchor[k],d=delta[k]||0;if(!a)return null;return a.qty==null?null:a.qty+d;}};\n}\nconst oh = buildOnHand(stockRows, movementRows);\n\nconst leadBySku = {};\nfor (const r of leadRows) {\n  const raw = leadDays(r);\n  const lt = (raw === \"\" || raw === null || raw === undefined) ? null : Number(raw);\n  const existing = leadBySku[r.sku];\n  if (!existing || (lt !== null && (existing.lead_time === null || lt < existing.lead_time))) {\n    leadBySku[r.sku] = { supplier: supplierOf(r), lead_time: lt };\n  }\n}\n\n// open POs (not yet received) suppress re-nagging & re-proposing, keyed warehouse|sku\nconst OPEN = new Set(['PENDING','PLACED','CONFIRMED']);\nconst openBy = {};\nfor (const p of poRows) {\n  const st = String(p.status || '').toUpperCase();\n  if (!OPEN.has(st)) continue;\n  const k = (p.warehouse_id ?? '') + '|' + p.sku;\n  if (!openBy[k]) openBy[k] = { po_id: p.po_id, status: st, expected_date: p.expected_date || '' };\n}\n\nconst flagged = [];\nconst pos = [];\nconst now = new Date().toISOString();\n\nfor (const r of stockRows) {\n  const sku = r.sku;\n  const rp = REORDER_POINT[sku];\n  if (rp === undefined) continue;\n  const wh = whId(r);\n  const qty = oh.get(wh, sku);   // DERIVED on-hand\n\n  let status, orderQty;\n  if (qty === null || isNaN(qty)) { status = \"UNKNOWN\"; orderQty = null; }\n  else if (qty <= rp) { status = (qty <= 0) ? \"STOCKOUT\" : \"LOW\"; const target = TARGET_LEVEL[sku] || rp * 3; orderQty = Math.max(target - qty, 0); }\n  else continue;\n\n  const lead = leadBySku[sku] || { supplier: \"Unknown\", lead_time: null };\n  const k = (wh ?? '') + '|' + sku;\n  const open = openBy[k] || null;\n\n  const item = {\n    warehouse: wh, sku, on_hand: qty, reorder_point: rp, status,\n    suggested_order_qty: orderQty, supplier: lead.supplier, lead_time_days: lead.lead_time,\n    conflict: r.conflict === true || String(r.conflict).toLowerCase() === \"true\",\n    on_order: !!open, po_created: null\n  };\n\n  if (!open && status !== \"UNKNOWN\" && orderQty > 0) {\n    const poId = 'PO-' + now.slice(0,10).replace(/-/g,'') + '-' + Math.random().toString(36).slice(2,6).toUpperCase();\n    pos.push({\n      po_id: poId, created_at: now, sku, qty: orderQty, warehouse_id: wh,\n      supplier: lead.supplier, source: 'reorder', linked_order_id: '',\n      lead_time_days: (lead.lead_time ?? ''), buffer_days: 3,\n      placed_at: '', expected_date: '', status: 'PENDING', received_at: '', movement_posted: '', note: 'auto reorder'\n    });\n    item.po_created = poId;\n  }\n  item._po = open;\n  flagged.push(item);\n}\n\nif (flagged.length === 0) return [];\n\nconst rank = { \"STOCKOUT\": 0, \"LOW\": 1, \"UNKNOWN\": 2 };\nflagged.sort((a, b) => (rank[a.status] - rank[b.status]) || String(a.warehouse).localeCompare(String(b.warehouse)));\n\nconst lines = flagged.map(f => {\n  const onHand = f.on_hand === null ? \"unknown\" : f.on_hand;\n  const leadTxt = f.lead_time_days == null ? \"lead n/a\" : `${f.lead_time_days}d lead`;\n  const conflictTxt = f.conflict ? \"  :warning: conflict\" : \"\";\n  if (f.on_order) {\n    const eta = f._po && f._po.expected_date ? `ETA ${f._po.expected_date}` : \"awaiting placement\";\n    return `:hourglass_flowing_sand: *${f.sku}* @ ${f.warehouse} — on hand: ${onHand} — on order (${f._po.po_id}, ${eta})${conflictTxt}`;\n  }\n  if (f.status === \"UNKNOWN\") {\n    return `:white_circle: *${f.sku}* @ ${f.warehouse} — on hand: unknown (reorder ≤ ${f.reorder_point}) → verify stock manually${conflictTxt}`;\n  }\n  const icon = f.status === \"STOCKOUT\" ? \":red_circle:\" : \":large_orange_circle:\";\n  return `${icon} *${f.sku}* @ ${f.warehouse} — on hand: ${onHand} (reorder ≤ ${f.reorder_point}) → *PO proposed: ${f.suggested_order_qty}* from ${f.supplier} (${leadTxt})${conflictTxt}`;\n});\n\nconst counts = flagged.reduce((a, f) => { a[f.status] = (a[f.status] || 0) + 1; return a; }, {});\nconst onOrderCount = flagged.filter(f => f.on_order).length;\nconst header = `:package: *Low-stock reorder* — ${flagged.length} flagged ` +\n  `(${counts.STOCKOUT || 0} stockout, ${counts.LOW || 0} low, ${counts.UNKNOWN || 0} unknown; ` +\n  `${onOrderCount} already on order, ${pos.length} new PO${pos.length === 1 ? '' : 's'} proposed)`;\n\nconst message = `${header}\\n\\n${lines.join(\"\\n\")}`;\nreturn [{ json: { alert_count: flagged.length, message, items: flagged, pos } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        272
+      ],
+      "id": "5ae1ca35-ac0f-4bc4-8ab6-4fe89ed17112",
+      "name": "Compute Reorders"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "https://app.slack.com/client/T0BJKJ5CFPT/C0BKA8XNEG5",
+          "mode": "url"
+        },
+        "text": "={{ $json.message }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        336,
+        272
+      ],
+      "id": "aef39cd2-3a39-4f30-96d9-8f9fc37aafe1",
+      "name": "Post to Slack",
+      "credentials": {
+        "slackOAuth2Api": {
+          "name": "Slack account"
+        }
+      },
+      "notes": "Set your Slack credential + pick the channel (e.g. #logistics-alerts). To send by email instead, swap this node for a Gmail node using {{ $json.message }} as the body."
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A",
+          "mode": "list",
+          "cachedResultName": "StockMovements",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -256,
+        688
+      ],
+      "id": "d4d2efa3-507a-45b5-9ebd-00e655b81147",
+      "name": "Get StockMovements",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Read the StockMovements ledger. After import: pick the StockMovements doc + tab from the dropdowns."
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg",
+          "mode": "list",
+          "cachedResultName": "PurchaseOrders",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -256,
+        864
+      ],
+      "id": "ae6b2213-6810-42fa-a406-84cb2d4eacba",
+      "name": "Get PurchaseOrders (open)",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Read PurchaseOrders to suppress SKUs already on order. Select the PurchaseOrders doc + tab."
+    },
+    {
+      "parameters": {
+        "jsCode": "return ($json.pos || []).map(json => ({ json }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        592
+      ],
+      "id": "149501f0-338e-4304-9d47-4babab0fd74c",
+      "name": "Extract Reorder POs"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg",
+          "mode": "list",
+          "cachedResultName": "PurchaseOrders",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "po_id",
+              "displayName": "po_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "qty",
+              "displayName": "qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "warehouse_id",
+              "displayName": "warehouse_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "supplier",
+              "displayName": "supplier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "linked_order_id",
+              "displayName": "linked_order_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lead_time_days",
+              "displayName": "lead_time_days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "buffer_days",
+              "displayName": "buffer_days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "placed_at",
+              "displayName": "placed_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "expected_date",
+              "displayName": "expected_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "movement_posted",
+              "displayName": "movement_posted",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "note",
+              "displayName": "note",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        864,
+        592
+      ],
+      "id": "e345cfa2-fc2d-437c-adbc-677c5c7476df",
+      "name": "Log Reorder POs",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Append PENDING reorder POs (source=reorder). Same PurchaseOrders sheet."
+    }
+  ],
+  "connections": {
+    "Daily 08:00": {
+      "main": [
+        [
+          {
+            "node": "Get Stock (CleanWarehouse)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Lead Times (CleanLeads)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get StockMovements",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get PurchaseOrders (open)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Stock (CleanWarehouse)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Lead Times (CleanLeads)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Compute Reorders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Reorders": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extract Reorder POs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get StockMovements": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Get PurchaseOrders (open)": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Extract Reorder POs": {
+      "main": [
+        [
+          {
+            "node": "Log Reorder POs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "triggerCount": 0,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

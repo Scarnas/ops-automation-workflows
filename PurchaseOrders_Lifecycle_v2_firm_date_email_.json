@@ -1,0 +1,536 @@
+{
+  "name": "PurchaseOrders Lifecycle (v2 - firm-date email)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -464,
+        112
+      ],
+      "id": "c428f453-a268-40ff-91c9-f2b760b764db",
+      "name": "Every 15 min"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg",
+          "mode": "list",
+          "cachedResultName": "PurchaseOrders",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -240,
+        112
+      ],
+      "id": "a37affa7-07a2-41b1-b15d-58d5b5a409b9",
+      "name": "Get PurchaseOrders",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Read the PO ledger. Select the PurchaseOrders doc + tab."
+    },
+    {
+      "parameters": {
+        "jsCode": "function addDays(dateStr,n){const d=new Date(String(dateStr).slice(0,10)+'T00:00:00Z');if(isNaN(d))return null;d.setUTCDate(d.getUTCDate()+Number(n));return d.toISOString().slice(0,10);}\nconst isSet=v=>v!==''&&v!=null&&v!==undefined;\nconst out=[];\nfor(const it of $input.all()){\n  const r={...it.json}; let changed=false;\n  // placed but no expected_date -> compute real ETA and flip to PLACED\n  if(isSet(r.placed_at)&&!isSet(r.expected_date)){\n    r.expected_date=addDays(r.placed_at, Number(r.lead_time_days||0)+Number(r.buffer_days||0));\n    if(String(r.status).toUpperCase()==='PENDING') r.status='PLACED';\n    changed=true;\n  }\n  // received & not yet posted -> mark posted (the receipt movement is emitted by the other branch)\n  if(String(r.status).toUpperCase()==='RECEIVED' && String(r.movement_posted).toLowerCase()!=='yes'){\n    r.movement_posted='yes';\n    if(!isSet(r.received_at)) r.received_at=new Date().toISOString();\n    changed=true;\n  }\n  if(changed) out.push({json:r});\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "468d8624-71d7-4945-9326-8b5c35c27288",
+      "name": "Compute PO Writebacks"
+    },
+    {
+      "parameters": {
+        "jsCode": "const isSet=v=>v!==''&&v!=null&&v!==undefined;\nconst out=[];\nfor(const it of $input.all()){\n  const r=it.json;\n  if(String(r.status).toUpperCase()==='RECEIVED' && String(r.movement_posted).toLowerCase()!=='yes'){\n    out.push({json:{\n      movement_id:'MOV-REC-'+r.po_id,\n      ts:(isSet(r.received_at)?r.received_at:new Date().toISOString()),\n      warehouse_id:r.warehouse_id, sku:r.sku,\n      delta:Math.abs(Number(r.qty)), type:'RECEIPT', ref:r.po_id, note:'PO received'\n    }});\n  }\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        224
+      ],
+      "id": "4e9d590a-64ac-41a0-b4f9-ee45f4fd6de1",
+      "name": "Compute Receipt Movements"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg",
+          "mode": "list",
+          "cachedResultName": "PurchaseOrders",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "po_id",
+              "displayName": "po_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "qty",
+              "displayName": "qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "warehouse_id",
+              "displayName": "warehouse_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "supplier",
+              "displayName": "supplier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "linked_order_id",
+              "displayName": "linked_order_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lead_time_days",
+              "displayName": "lead_time_days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "buffer_days",
+              "displayName": "buffer_days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "placed_at",
+              "displayName": "placed_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "expected_date",
+              "displayName": "expected_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "movement_posted",
+              "displayName": "movement_posted",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "note",
+              "displayName": "note",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        240,
+        0
+      ],
+      "id": "777d7fd5-dfdb-494c-a0ac-428f1a5aacb6",
+      "name": "Update PurchaseOrders",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "appendOrUpdate on po_id. Writes back expected_date/status/movement_posted."
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A",
+          "mode": "list",
+          "cachedResultName": "StockMovements",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "movement_id",
+              "displayName": "movement_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ts",
+              "displayName": "ts",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "delta",
+              "displayName": "delta",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "type",
+              "displayName": "type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ref",
+              "displayName": "ref",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "warehouse_id",
+              "displayName": "warehouse_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "note",
+              "displayName": "note",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        240,
+        224
+      ],
+      "id": "ae2aa514-16b0-413b-828b-29f4c7910b81",
+      "name": "Append Receipt Movement",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Append +qty RECEIPT to the StockMovements ledger."
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1FRPTRFGM8YBgxfPEn6HBgzO5qLacAae5JjRNIIR8dm0",
+          "mode": "list",
+          "cachedResultName": "Orderslog",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1FRPTRFGM8YBgxfPEn6HBgzO5qLacAae5JjRNIIR8dm0/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1FRPTRFGM8YBgxfPEn6HBgzO5qLacAae5JjRNIIR8dm0/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -240,
+        352
+      ],
+      "id": "116d5883-ed3a-41f6-a58a-09f75cd01c37",
+      "name": "Get Orderslog",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Read Orderslog to find the customer email by linked_order_id."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Firm-date follow-up: when a PO is placed (placed_at set, expected_date not yet computed),\n// email the linked customer the confirmed delivery date. Fires exactly once per PO —\n// next run expected_date is filled, so the row no longer qualifies.\nfunction addDays(dateStr,n){const d=new Date(String(dateStr).slice(0,10)+'T00:00:00Z');if(isNaN(d))return null;d.setUTCDate(d.getUTCDate()+Number(n));return d.toISOString().slice(0,10);}\nconst isSet=v=>v!==''&&v!=null&&v!==undefined;\nconst orders=$('Get Orderslog').all().map(i=>i.json);\nconst out=[];\nfor(const it of $input.all()){\n  const r=it.json;\n  if(!(isSet(r.placed_at) && !isSet(r.expected_date))) continue;\n  const expected=addDays(r.placed_at, Number(r.lead_time_days||0)+Number(r.buffer_days||0));\n  const ord=orders.find(o=>(o.order_id||'')===(r.linked_order_id||''));\n  const email=ord?(ord.email||'').toString().trim():'';\n  if(!email) continue;\n  const name=ord?(ord.customer||''):'';\n  out.push({json:{\n    email,\n    subject:`Confirmed delivery date — ${r.sku} (x${r.qty}) — ${expected}`,\n    body:`Hi ${name},\\n\\nGood news — the backordered part of your order (${r.qty} × ${r.sku}) has now been placed with our supplier and has a confirmed estimated delivery date: ${expected}.\\n\\nWe'll let you know if anything changes.\\n\\nThanks,\\nOperations Team`\n  }});\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        432
+      ],
+      "id": "df898da4-67e8-4c62-9e28-08caf07b0952",
+      "name": "Compute Just-Placed Emails"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        240,
+        432
+      ],
+      "id": "978dbae7-1d81-46f5-b184-e52dbc7bd328",
+      "name": "Send Confirmed Date",
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 min": {
+      "main": [
+        [
+          {
+            "node": "Get PurchaseOrders",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Orderslog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get PurchaseOrders": {
+      "main": [
+        [
+          {
+            "node": "Compute PO Writebacks",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Compute Receipt Movements",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Compute Just-Placed Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute PO Writebacks": {
+      "main": [
+        [
+          {
+            "node": "Update PurchaseOrders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Receipt Movements": {
+      "main": [
+        [
+          {
+            "node": "Append Receipt Movement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Just-Placed Emails": {
+      "main": [
+        [
+          {
+            "node": "Send Confirmed Date",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "triggerCount": 0,
+  "meta": null
+}

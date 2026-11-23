@@ -1,0 +1,855 @@
+{
+  "name": "Warehouse Automation (v5 - backorder split)",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Sistema",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Customer Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Email",
+              "fieldType": "email",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Phone"
+            },
+            {
+              "fieldLabel": "SKU",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "REBAR-12MM"
+                  },
+                  {
+                    "option": "CEMENT-25KG"
+                  },
+                  {
+                    "option": "TIMBER-50X100"
+                  },
+                  {
+                    "option": "INSULATION-50MM"
+                  },
+                  {
+                    "option": "BRICK-PALLET"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Quantity",
+              "fieldType": "number"
+            },
+            {
+              "fieldLabel": "Requested Warehouse",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "VLN-01"
+                  },
+                  {
+                    "option": "KNS-02"
+                  },
+                  {
+                    "option": "KLP"
+                  },
+                  {
+                    "option": "SIA-05"
+                  },
+                  {
+                    "option": "PNV-06"
+                  },
+                  {
+                    "option": "ALY-07"
+                  },
+                  {
+                    "option": "MRJ-04"
+                  },
+                  {
+                    "option": "UTN-08"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Allow Backorder",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Yes"
+                  },
+                  {
+                    "option": "No"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        -224,
+        128
+      ],
+      "id": "aa7835a6-1d88-47b0-9c4a-f726ea629a89",
+      "name": "Form Trigger"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao",
+          "mode": "list",
+          "cachedResultName": "CleanLeads",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        0,
+        0
+      ],
+      "id": "95030749-5a05-45af-ad5e-485049a4a292",
+      "name": "Get Lead Time for SKU",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA",
+          "mode": "list",
+          "cachedResultName": "CleanWarehouse",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        0,
+        256
+      ],
+      "id": "eb25e552-30cf-44fb-a7fa-a81e4f7ed7d1",
+      "name": "Get Stock for SKU",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const order = $('Form Trigger').first().json;\nconst requestedSku = order.SKU;\nconst requestedQty = Number(order.Quantity);\nconst requestedWarehouse = order['Requested Warehouse'];\nif (!requestedSku || !(requestedQty > 0)) return []; // junk guard: no sku / non-positive qty\n\nconst rows = $input.all().map(i => i.json);\nconst movementRows = rows.filter(r => ('delta' in r) || ('type' in r && 'ts' in r));\nconst stockRows = rows.filter(r => !('delta' in r) && (('stock_qty' in r) || ('row_key' in r) || ('conflict' in r) || ('last_updated' in r)));\nconst leadRows  = rows.filter(r => !('delta' in r) && (('lead_time_days' in r) || ('lead_time' in r)) && !('stock_qty' in r) && !('row_key' in r));\n\nfunction buildOnHand(sRows,mRows){\n  const num=v=>(v===''||v==null||String(v).toLowerCase()==='n/a')?null:Number(v);\n  const K=(w,s)=>w+'|'+s; const anchor={};\n  for(const r of sRows){const w=r.warehouse_id??r.ID,s=r.sku;if(w==null||s==null)continue;anchor[K(w,s)]={qty:num(r.stock_qty??r.qty),lu:(r.last_updated||'')};}\n  const delta={};\n  for(const m of mRows){const w=m.warehouse_id,s=m.sku;if(w==null||s==null)continue;const k=K(w,s);const cut=anchor[k]?anchor[k].lu:'';if(String(m.ts||'')>cut)delta[k]=(delta[k]||0)+Number(m.delta||0);}\n  return {get(w,s){const k=K(w,s),a=anchor[k],d=delta[k]||0;if(!a)return null;return a.qty==null?null:a.qty+d;}};\n}\nconst oh = buildOnHand(stockRows, movementRows);\nconst avail = wh => { const v = oh.get(wh, requestedSku); return (v==null||v<0)?0:v; };\nconst allowBackorder = /^y/i.test(String(order['Allow Backorder'] ?? 'Yes').trim());\n\nconst created = new Date();\nconst orderId = 'ORD-' + created.toISOString().slice(0,10).replace(/-/g,'') + '-' + Math.random().toString(36).slice(2,6).toUpperCase();\nconst PLACE_LAG = 2, BUFFER = 3;\nconst leadRow = leadRows.find(r => r.sku === requestedSku);\nconst leadVal = leadRow ? Number(leadRow.lead_time_days ?? leadRow.lead_time) : NaN;\nconst mfgEta = PLACE_LAG + ((leadRow && !isNaN(leadVal)) ? leadVal : 21) + BUFFER;\n\nconst mkLine = (path, srcWh, qty, etaDays) => {\n  const etaDate = new Date(created); etaDate.setDate(etaDate.getDate() + etaDays);\n  return { json: {\n    order_id: orderId,\n    created_at: created.toISOString(),\n    customer: order['Customer Name'],\n    email: order['Email'] || null,\n    phone: order['Phone'] || null,\n    sku: requestedSku,\n    qty,\n    requested_warehouse: requestedWarehouse,\n    fulfillment_path: path,\n    source_warehouse: srcWh,\n    eta_days: etaDays,\n    eta_date: etaDate.toISOString().slice(0,10)\n  }};\n};\n\nconst others = stockRows\n  .filter(r => (r.warehouse_id ?? r.ID) !== requestedWarehouse && r.sku === requestedSku)\n  .map(r => ({ w:(r.warehouse_id ?? r.ID), avail: avail(r.warehouse_id ?? r.ID) }))\n  .filter(x => x.avail > 0)\n  .sort((a,b)=> b.avail - a.avail);\n\nconst localAvail = avail(requestedWarehouse);\nconst lines = [];\n\nif (localAvail >= requestedQty) {\n  lines.push(mkLine('Local', requestedWarehouse, requestedQty, 2));\n} else {\n  const fullOther = others.find(x => x.avail >= requestedQty);\n  if (fullOther) {\n    lines.push(mkLine('Warehouse Transfer', fullOther.w, requestedQty, 5));\n  } else if (allowBackorder && localAvail > 0) {\n    lines.push(mkLine('Local', requestedWarehouse, localAvail, 2));           // ship what's on the shelf now\n    const shortfall = requestedQty - localAvail;\n    const shortOther = others.find(x => x.avail >= shortfall);\n    if (shortOther) lines.push(mkLine('Warehouse Transfer', shortOther.w, shortfall, 5));\n    else            lines.push(mkLine('Manufacturer Order', null, shortfall, mfgEta));\n  } else {\n    lines.push(mkLine('Manufacturer Order', null, requestedQty, mfgEta));\n  }\n}\nreturn lines;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        128
+      ],
+      "id": "a9256322-f54d-4d0e-af51-c29f35e60a4d",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        176,
+        144
+      ],
+      "id": "1f7f3827-1059-4ceb-94e9-eb3bc1b36a8c",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1FRPTRFGM8YBgxfPEn6HBgzO5qLacAae5JjRNIIR8dm0",
+          "mode": "list",
+          "cachedResultName": "Orderslog",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1FRPTRFGM8YBgxfPEn6HBgzO5qLacAae5JjRNIIR8dm0/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1FRPTRFGM8YBgxfPEn6HBgzO5qLacAae5JjRNIIR8dm0/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "customer": "={{ $json.customer }}",
+            "email": "={{ $json.email }}",
+            "phone": "={{ $json.phone }}",
+            "sku": "={{ $json.sku }}",
+            "qty": "={{ $json.qty }}",
+            "request": "={{ $json.requested_warehouse }}",
+            "fulfilment path": "={{ $json.fulfillment_path }}",
+            "source": "={{ $json.source_warehouse }}",
+            "eta_days": "={{ $json.eta_days }}",
+            "eta_date": "={{ $json.eta_date }}",
+            "order_id": "={{ $json.order_id }}",
+            "created_at": "={{ $json.created_at }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "customer",
+              "displayName": "customer",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "qty",
+              "displayName": "qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "request",
+              "displayName": "request",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fulfilment path",
+              "displayName": "fulfilment path",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "eta_days",
+              "displayName": "eta_days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "eta_date",
+              "displayName": "eta_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "order_id",
+              "displayName": "order_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        624,
+        128
+      ],
+      "id": "28d21ba6-2e69-439e-992b-3cb59e806e42",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A",
+          "mode": "list",
+          "cachedResultName": "StockMovements",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        0,
+        528
+      ],
+      "id": "95dd62d7-be8f-450e-ade3-cfc18e21d6ab",
+      "name": "Get StockMovements",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Read the StockMovements ledger. After import: pick the StockMovements doc + tab from the dropdowns."
+    },
+    {
+      "parameters": {
+        "jsCode": "// One negative movement per Local/Transfer line (stock leaves the fulfilling warehouse).\nconst out = [];\nfor (const it of $input.all()) {\n  const o = it.json;\n  if (o.fulfillment_path !== 'Local' && o.fulfillment_path !== 'Warehouse Transfer') continue;\n  const warehouse = o.source_warehouse;\n  if (!warehouse) continue;\n  const mid = 'MOV-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + Math.random().toString(36).slice(2,6).toUpperCase();\n  out.push({ json: {\n    movement_id: mid, ts: o.created_at, warehouse_id: warehouse, sku: o.sku,\n    delta: -Math.abs(Number(o.qty)), type: 'ORDER', ref: o.order_id, note: o.fulfillment_path\n  }});\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        432
+      ],
+      "id": "579279af-a98f-4a11-ae19-f23fa09a8bb8",
+      "name": "Build Movement"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A",
+          "mode": "list",
+          "cachedResultName": "StockMovements",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/15SCNA1aVIPSAL_Sh8mK7DQNl7RVahxzmFPWh_PnKE5A/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "movement_id",
+              "displayName": "movement_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ts",
+              "displayName": "ts",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "delta",
+              "displayName": "delta",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "type",
+              "displayName": "type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ref",
+              "displayName": "ref",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "warehouse_id",
+              "displayName": "warehouse_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "note",
+              "displayName": "note",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        672,
+        432
+      ],
+      "id": "dccd7db8-4506-47ba-b92a-fcceff9a2bdb",
+      "name": "Log Movement",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Append-only ledger. Headers: movement_id, ts, warehouse_id, sku, delta, type, ref, note. Select the StockMovements doc+tab."
+    },
+    {
+      "parameters": {
+        "jsCode": "// One PENDING purchase order per Manufacturer Order line (incl. backordered shortfalls).\nconst leads = $('Get Lead Time for SKU').all().map(i => i.json);\nconst out = [];\nfor (const it of $input.all()) {\n  const o = it.json;\n  if (o.fulfillment_path !== 'Manufacturer Order') continue;\n  const lr = leads.find(r => r.sku === o.sku);\n  const leadRaw = lr ? (lr.lead_time_days ?? lr.lead_time) : null;\n  const lead = (leadRaw === '' || leadRaw == null) ? 21 : Number(leadRaw);\n  const supplier = lr ? ((lr['supplier '] ?? lr.supplier ?? 'Unknown').toString().trim()) : 'Unknown';\n  const poId = 'PO-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + Math.random().toString(36).slice(2,6).toUpperCase();\n  out.push({ json: {\n    po_id: poId, created_at: o.created_at, sku: o.sku, qty: o.qty,\n    warehouse_id: o.requested_warehouse, supplier, source: 'demand',\n    linked_order_id: o.order_id, lead_time_days: lead, buffer_days: 3,\n    placed_at: '', expected_date: '', status: 'PENDING', received_at: '', movement_posted: '', note: ''\n  }});\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        608
+      ],
+      "id": "e9edc75c-4990-43b6-ae0f-29a440adf20f",
+      "name": "Build PO"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg",
+          "mode": "list",
+          "cachedResultName": "PurchaseOrders",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HrMjsFRpL2BHns41Bwy2c-oClgz5314HKSh1zTwqRTg/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "po_id",
+              "displayName": "po_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "qty",
+              "displayName": "qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "warehouse_id",
+              "displayName": "warehouse_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "supplier",
+              "displayName": "supplier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "linked_order_id",
+              "displayName": "linked_order_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lead_time_days",
+              "displayName": "lead_time_days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "buffer_days",
+              "displayName": "buffer_days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "placed_at",
+              "displayName": "placed_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "expected_date",
+              "displayName": "expected_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "movement_posted",
+              "displayName": "movement_posted",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "note",
+              "displayName": "note",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        672,
+        608
+      ],
+      "id": "e3ab6998-2294-4152-b6a4-990a42c270ec",
+      "name": "Log PurchaseOrder",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Append-only PO ledger. Select the PurchaseOrders doc + tab."
+    }
+  ],
+  "connections": {
+    "Form Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Lead Time for SKU",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Stock for SKU",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get StockMovements",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Lead Time for SKU": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Stock for SKU": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Movement",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build PO",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get StockMovements": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Build Movement": {
+      "main": [
+        [
+          {
+            "node": "Log Movement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build PO": {
+      "main": [
+        [
+          {
+            "node": "Log PurchaseOrder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "triggerCount": 0,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

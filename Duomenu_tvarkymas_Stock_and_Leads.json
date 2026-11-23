@@ -1,0 +1,435 @@
+{
+  "name": "Duomenu tvarkymas - Stock and Leads",
+  "nodes": [
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "12mzZdkqJQOyzH95P6k8oyNveFAjXFb2IktICwyb_rzo",
+          "mode": "list",
+          "cachedResultName": "raw_manufacturer_leadtimes",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12mzZdkqJQOyzH95P6k8oyNveFAjXFb2IktICwyb_rzo/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1888821130,
+          "mode": "list",
+          "cachedResultName": "raw_manufacturer_leadtimes.csv",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/12mzZdkqJQOyzH95P6k8oyNveFAjXFb2IktICwyb_rzo/edit#gid=1888821130"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        688,
+        304
+      ],
+      "id": "eca610d3-bd1a-4ed4-9d69-dc54c42fc281",
+      "name": "LeadTimes",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1rL9ro2LsOAJmKxOdA7Xi_30WJabiVJ8PJOQrMMI2HuY",
+          "mode": "list",
+          "cachedResultName": "raw_warehouse_export",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1rL9ro2LsOAJmKxOdA7Xi_30WJabiVJ8PJOQrMMI2HuY/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 765376812,
+          "mode": "list",
+          "cachedResultName": "raw_warehouse_export.csv",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1rL9ro2LsOAJmKxOdA7Xi_30WJabiVJ8PJOQrMMI2HuY/edit#gid=765376812"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        688,
+        528
+      ],
+      "id": "dc224b89-c9e4-48fa-9ae6-68da4bf211f7",
+      "name": "Stock",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        496,
+        416
+      ],
+      "id": "3e4b86e1-dc5f-4972-acc9-3c4da48b30a4",
+      "name": "Start"
+    },
+    {
+      "parameters": {
+        "jsCode": "function normalizeKey(raw) {\n  return raw\n    .toLowerCase()\n    .normalize(\"NFD\")\n    .replace(/[\\u0300-\\u036f]/g, \"\") // strips diacritics: š→s, ė→e, ž→z, ū→u\n    .replace(/[\\s\\-]/g, \"\");\n}\n\nconst skuMap = {\n  \"rebar12mm\": \"REBAR-12MM\", \"armatura12mm\": \"REBAR-12MM\", \"armature12mm\": \"REBAR-12MM\",\n  \"cement25kg\": \"CEMENT-25KG\", \"cementas25kg\": \"CEMENT-25KG\",\n  \"mediena50x100\": \"TIMBER-50X100\", \"timber50x100\": \"TIMBER-50X100\",\n  \"termoizoliacija50mm\": \"INSULATION-50MM\", \"insulation50mm\": \"INSULATION-50MM\",\n  \"plytupalete\": \"BRICK-PALLET\", \"plytupaletee\": \"BRICK-PALLET\", \"brickpallet\": \"BRICK-PALLET\"\n};\n\nconst warehouseMap = {\n  \"vilniuswh\": \"VLN-01\", \"vln01\": \"VLN-01\", \"vilniuswarehouse\": \"VLN-01\", \"warehousevilnius\": \"VLN-01\",\n  \"kaunaswh\": \"KNS-02\", \"kaunassandelis\": \"KNS-02\", \"kns02\": \"KNS-02\",\n  \"klaipedawh\": \"KLP\", \"klaipedasandelis\": \"KLP\", \"klp\": \"KLP\",\n  \"siauliaiwh\": \"SIA-05\", \"siauliaisandelis\": \"SIA-05\", \"sia05\": \"SIA-05\",\n  \"panevezyswh\": \"PNV-06\", \"panevezys\": \"PNV-06\",\n  \"alytuswh\": \"ALY-07\", \"alytaussandelis\": \"ALY-07\",\n  \"marijampolewh\": \"MRJ-04\",\n\"marijampolessandelis\": \"MRJ-04\",\n  \"utenawh\": \"UTN-08\", \"utn08\": \"UTN-08\"\n};\n\nfunction parseQty(raw) {\n  if (raw === null || raw === undefined || raw === \"\") return null; // unknown\n  const text = String(raw).trim().toLowerCase();\n  if (text === \"n/a\") return null;          // unknown\n  if (text === \"out of stock\") return 0;     // known: zero, not missing\n  const number = parseInt(text, 10);\n  if (isNaN(number) || number < 0) return null; // bad data treated as unknown\n  return number;\n}\n\nfunction parseDate(raw) {\n  if (!raw) return null;\n  const text = String(raw).trim();\n  if (/^\\d{4}-\\d{2}-\\d{2}$/.test(text)) return text;\n  const slash = text.match(/^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/);\n  if (slash) return `${slash[3]}-${slash[2]}-${slash[1]}`;\n  const hyphen = text.match(/^(\\d{2})-(\\d{2})-(\\d{4})$/);\n  if (hyphen) return `${hyphen[3]}-${hyphen[2]}-${hyphen[1]}`;\n  return null;\n}\n\nconst output = [];\n\nfor (const item of $input.all()) {\n  const raw = item.json;\n  output.push({\n    json: {\n      warehouse_id: warehouseMap[normalizeKey(raw.warehouse_raw)] || null,\n      sku: skuMap[normalizeKey(raw.sku_raw)] || null,\n      stock_qty: parseQty(raw.qty_raw),\n      last_updated: parseDate(raw.last_updated_raw),\n      notes: raw.notes || null\n    }\n  });\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        528
+      ],
+      "id": "0d15fc91-0b90-4965-ab3c-d84c838676d6",
+      "name": "Clean stock"
+    },
+    {
+      "parameters": {
+        "jsCode": "const skuMap = {\n  \"rebar12mm\": \"REBAR-12MM\",\n  \"armatura12mm\": \"REBAR-12MM\",\n  \"cement25kg\": \"CEMENT-25KG\",\n  \"cementas25kg\": \"CEMENT-25KG\",\n  \"mediena50x100\": \"TIMBER-50X100\",\n  \"timber50x100\": \"TIMBER-50X100\",\n  \"termoizoliacija50mm\": \"INSULATION-50MM\",\n  \"insulation50mm\": \"INSULATION-50MM\",\n  \"plytupalete\": \"BRICK-PALLET\",\n  \"brickpallet\": \"BRICK-PALLET\"\n};\n\nfunction normalizeKey(raw) {\n  return raw.toLowerCase().replace(/[\\s\\-]/g, \"\");\n}\n\nconst output = [];\n\nfor (const item of $input.all()) {\n  const raw = item.json;\n  const sku = skuMap[normalizeKey(raw.sku_raw)] || null;\n\n  let leadTimeDays = null;\n\nif (raw.lead_time_raw) {\n  const text = String(raw.lead_time_raw).toLowerCase();\n  const match = text.match(/\\d+/);\n  if (match) {\n    const number = parseInt(match[0], 10);\n    leadTimeDays = (text.includes(\"week\") || text.includes(\"savait\")) ? number * 7 : number;\n  }\n}\n\n  output.push({\n    json: {\n      sku: sku,\n      supplier: raw.supplier || null,\n      lead_time_days: leadTimeDays,\n      notes: raw.notes || null\n    }\n  });\n}\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        304
+      ],
+      "id": "53e0ce6f-2c65-4125-9830-82396f064330",
+      "name": "CleadLeads"
+    },
+    {
+      "parameters": {
+        "jsCode": "const bestBySku = {};\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  const existing = bestBySku[row.sku];\n\n  if (!existing || (row.lead_time_days !== null && (existing.lead_time_days === null || row.lead_time_days < existing.lead_time_days))) {\n    bestBySku[row.sku] = row;\n  }\n}\n\nreturn Object.values(bestBySku).map(row => ({ json: row }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        304
+      ],
+      "id": "1eb77c69-251b-4925-a545-89787b3d9fb8",
+      "name": "Dedupe"
+    },
+    {
+      "parameters": {
+        "jsCode": "const groups = {};\n\nfor (const item of $input.all()) {\n  const row = item.json;\n  const key = `${row.warehouse_id}|${row.sku}`;\n\n  if (!groups[key]) {\n    groups[key] = { ...row, conflict: false };\n    continue;\n  }\n\n  const existing = groups[key];\n\n  if (row.stock_qty !== null && existing.stock_qty !== null && row.stock_qty !== existing.stock_qty) {\n    existing.conflict = true;\n  }\n\n  const rowIsNewer = (row.last_updated || \"\") > (existing.last_updated || \"\");\n  const rowHasData = row.stock_qty !== null;\n  const existingHasData = existing.stock_qty !== null;\n\n  if (rowIsNewer || (!existingHasData && rowHasData)) {\n    groups[key] = { ...row, conflict: existing.conflict };\n  }\n}\n\nreturn Object.values(groups).map(row => ({ json: row }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        528
+      ],
+      "id": "80b94cac-85a7-49b6-b6be-1bee355bb274",
+      "name": "Dedupe1"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA",
+          "mode": "list",
+          "cachedResultName": "CleanWarehouse",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1RNZYx05MEGFBOZlvHymm39aazqCidJkVOZMODEgfhMA/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_key": "={{ $json.warehouse_id }}|{{ $json.sku }}",
+            "sku": "={{ $json.sku }}",
+            "notes": "={{ $json.notes }}",
+            "conflict": "={{ $json.conflict }}",
+            "warehouse_id": "={{ $json.warehouse_id }}",
+            "stock_qty": "={{ $json.stock_qty }}",
+            "last_updated": "={{ $json.last_updated }}"
+          },
+          "matchingColumns": [
+            "row_key"
+          ],
+          "schema": [
+            {
+              "id": "warehouse_id",
+              "displayName": "warehouse_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "stock_qty",
+              "displayName": "stock_qty",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_updated",
+              "displayName": "last_updated",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "conflict",
+              "displayName": "conflict",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_key",
+              "displayName": "row_key",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1312,
+        528
+      ],
+      "id": "b5a4123d-9906-45c4-b99c-8bc0ba653f25",
+      "name": "CleanRewriteStock",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao",
+          "mode": "list",
+          "cachedResultName": "CleanLeads",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1S_BJqBgRgMVvymFObX89jZlKd6LM1NabU7Zruk6GFao/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "sku": "={{ $json.sku }}",
+            "notes": "={{ $json.notes }}",
+            "supplier": "={{ $json.supplier }}",
+            "lead_time_days": "={{ $json.lead_time_days }}"
+          },
+          "matchingColumns": [
+            "sku"
+          ],
+          "schema": [
+            {
+              "id": "sku",
+              "displayName": "sku",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "supplier",
+              "displayName": "supplier",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "lead_time_days",
+              "displayName": "lead_time_days",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "notes",
+              "displayName": "notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1312,
+        304
+      ],
+      "id": "95cdd405-538d-4f9c-a52c-01114a20aa63",
+      "name": "CleanRewriteLeads",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "LeadTimes",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LeadTimes": {
+      "main": [
+        [
+          {
+            "node": "CleadLeads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stock": {
+      "main": [
+        [
+          {
+            "node": "Clean stock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean stock": {
+      "main": [
+        [
+          {
+            "node": "Dedupe1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CleadLeads": {
+      "main": [
+        [
+          {
+            "node": "Dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe": {
+      "main": [
+        [
+          {
+            "node": "CleanRewriteLeads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe1": {
+      "main": [
+        [
+          {
+            "node": "CleanRewriteStock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "triggerCount": 0,
+  "meta": null
+}
